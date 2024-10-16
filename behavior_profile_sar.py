@@ -5,7 +5,67 @@ import matplotlib.patches as mpatches
 import cv2
 import rasterio
 import argparse
+from noise import pnoise2
 np.random.seed(0)
+
+
+
+
+def run_simulation_for_profile(profile, image_paths, start_points, find_points, timesteps, iterations, i):
+    """Run the simulation for a given profile on all images and compute statistics."""
+    weights = []
+    
+    # Preload images and start processing in batches
+    for img_id, (naip_img_path, dem_img_path) in image_paths.items():
+        start_pos = np.array(start_points[img_id], dtype=np.float32)
+        find_point = np.array(find_points[img_id], dtype=np.float32)
+
+        end_points = np.zeros((iterations, 2), dtype=np.float32)  # Preallocate array for end points
+        
+        landscape = Landscape(size=447, rgb_image_path=naip_img_path, depth_image_path=dem_img_path)
+
+        # Run the simulation in a vectorized manner (if possible)
+        for it in range(iterations):
+            agent = Agent(start_position=start_pos, profile=profile)
+            simulate(landscape, agent, timesteps)
+            end_points[it] = agent.position
+        
+        # Vectorized calculation of energy statistic
+        energy_stat, avg_dist = calculate_energy_statistic(end_points, find_point)
+
+        if energy_stat != 0: 
+            weight = (avg_dist / energy_stat) ** 0.5
+            weights.append(weight)
+    
+
+
+
+def simulate(landscape, agent, timesteps, visualize=False):
+    agent.reset()
+    for _ in range(timesteps):
+        behavior_choice = np.random.choice(
+            ['RW', 'RT', 'DT', 'SP', 'VE', 'BT'],
+            p=agent.profile
+        )
+        if behavior_choice == 'RW':
+            provisional_position = agent.random_walk(landscape)
+        elif behavior_choice == 'RT':
+            provisional_position = agent.route_travel(landscape)
+        elif behavior_choice == 'DT':
+            provisional_position = agent.direction_travel(landscape)
+        elif behavior_choice == 'SP':
+            provisional_position = agent.stay_put(landscape)
+        elif behavior_choice == 'VE':
+            provisional_position = agent.view_enhance(landscape)
+        elif behavior_choice == 'BT':
+            provisional_position = agent.backtrack(landscape)
+        agent.update_velocity_and_position(provisional_position, landscape)
+    
+    if visualize:
+        agent.history.extend(agent.backtrack_history)
+
+        landscape.visualize(agent.history) 
+
 
 class Agent:
     def __init__(self, start_position, profile=[1, 0, 0, 0, 0, 0]):
@@ -174,21 +234,6 @@ class Landscape:
         return mask
 
     def generate_elevation(self):
-        # Placeholder: Generates random elevation data if no depth image is provided
-        elevation = np.random.rand(self.size, self.size)
-        return elevation
-
-    def generate_linear_features(self):
-        # Placeholder: Generates random linear features if no depth image is provided
-        linear_features = np.random.rand(self.size, self.size)
-        return linear_features
-
-    def generate_inaccessible_features(self):
-        # Placeholder: Generates random mask for inaccessible features
-        inaccessible_features = np.random.rand(self.size, self.size)
-        return inaccessible_features
-
-    def generate_elevation(self):
         scale = 100.0
         octaves = 6
         persistence = 0.5
@@ -280,6 +325,8 @@ def simulate(landscape, agent, timesteps, visualize=False):
         agent.history.extend(agent.backtrack_history)
 
         landscape.visualize(agent.history) 
+
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
